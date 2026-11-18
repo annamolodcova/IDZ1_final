@@ -160,8 +160,9 @@ export default function SettingsModal({
             Хранилище
           </h3>
           <p className="settings-note">
-            SQLite (sql.js) в этом браузере: файл базы лежит в OPFS, резервный вариант —
-            IndexedDB. Сетевых запросов у хранилища нет, данные не покидают устройство.
+            Локальная база SQLite: данные сохраняются в файл <code>career-diary.sqlite</code> в
+            папке проекта на вашем компьютере и синхронизируются с дисковым хранилищем браузера
+            (OPFS / IndexedDB).
           </p>
           {warning && (
             <p className="warning-banner" role="status">

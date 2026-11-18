@@ -15,7 +15,7 @@ export default function EmptyState({ onAdd, onLoadSamples, onFind }) {
         </button>
       </div>
       <p className="empty-hint">
-        Данные хранятся только в этом браузере. Примеры — демонстрационные, их можно удалить.
+        Данные сохраняются в локальный SQLite-файл career-diary.sqlite в папке проекта. Примеры — демонстрационные, их можно удалить.
       </p>
     </div>
   );

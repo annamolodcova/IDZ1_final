@@ -34,7 +34,8 @@ flowchart TD
 
     subgraph StorageLayer ["Слой персистентности данных (db.js / storage.js)"]
         SqlJs["SQLite WASM (sql.js v1.16)"]
-        OPFS["OPFS (Origin Private File System) — career-diary.sqlite"]
+        LocalFile["Локальный файл SQLite — career-diary.sqlite (в папке проекта)"]
+        OPFS["OPFS (Origin Private File System)"]
         IDB["IndexedDB fallback"]
         MemFallback["In-Memory fallback (с предупреждением)"]
         SessionStore["localStorage (career-diary.session.v1)"]
@@ -43,7 +44,8 @@ flowchart TD
     UI --> StateHooks
     StateHooks --> LogicLayer
     LogicLayer --> StorageLayer
-    SqlJs --> OPFS
+    SqlJs --> LocalFile
+    LocalFile --> OPFS
     OPFS -.->|если недоступен| IDB
     IDB -.->|если недоступен| MemFallback
     useAuth --> SessionStore
@@ -116,8 +118,9 @@ sequenceDiagram
         Queries->>DB: db.run("INSERT INTO vacancies ...", [id, userId, ...])
         DB-->>Queries: Запрос успешно выполнен
         Hook->>DB: exportDatabase() -> Uint8Array
-        DB->>Storage: saveDatabaseFile(bytes) в OPFS (career-diary.sqlite)
-        Storage-->>DB: Файл записан на диск браузера
+        DB->>Storage: POST /api/db -> запись в career-diary.sqlite на диске
+        DB->>Storage: saveDatabaseFile(bytes) в OPFS (браузерный кэш)
+        Storage-->>DB: Файл записан на диск проекта и в браузер
         Hook->>Queries: getVacanciesByUserId(db, userId)
         Queries-->>Hook: Свежий массив вакансий
         Hook-->>UI: Обновление состояния (setVacancies)
@@ -130,16 +133,19 @@ sequenceDiagram
 
 ## 4. Уровни хранения данных и устойчивость
 
-Приложение использует трехслойную стратегию надежного сохранения базы данных SQLite:
+Приложение использует многоуровневую стратегию надежного сохранения базы данных SQLite:
 
-1. **Основной уровень — OPFS (Origin Private File System):**
-   - Файл базы данных `career-diary.sqlite` сохраняется в приватную изолированную файловую систему браузера.
-   - Данные не теряются при закрытии вкладки, перезагрузке браузера и обновлении страницы (F5).
-2. **Резервный уровень — IndexedDB:**
+1. **Основной локальный уровень — файл `career-diary.sqlite` в папке проекта:**
+   - Файл базы данных SQLite физически сохраняется прямо на диск в корень проекта и папку `site/` через встроенный серверный эндпоинт `/api/db`.
+   - Данные можно в любой момент проинспектировать через системный терминал: `sqlite3 career-diary.sqlite "SELECT * FROM users;"`.
+   - Пользователи и вакансии сохраняются на диске компьютера и переживают перезапуск dev-сервера, перезагрузку страницы (F5) и перезапуск браузера.
+2. **Браузерный уровень — OPFS (Origin Private File System):**
+   - Бинарный дамп базы параллельно сохраняется в постоянную файловую систему браузера для независимой оффлайн-работы.
+3. **Резервный уровень — IndexedDB:**
    - Если браузер или окружение не поддерживает OPFS (например, приватный режим некоторых браузеров), бинарный дамп автоматически сохраняется как Blob в хранилище IndexedDB `career-diary-db`.
-3. **Аварийный уровень — In-Memory:**
-   - Если доступ к дисковым API полностью заблокирован, база инициализируется в оперативной памяти WASM. При этом в интерфейсе отображается заметный баннер с предупреждением о том, что данные сохраняются только до закрытия вкладки.
-4. **Резервное копирование — Экспорт/Импорт JSON:**
+4. **Аварийный уровень — In-Memory:**
+   - Если доступ к дисковым API полностью заблокирован, база инициализируется в оперативной памяти WASM с отображением предупреждающего баннера.
+5. **Резервное копирование — Экспорт/Импорт JSON:**
    - В окне настроек профиля реализована возможность выгрузки полного JSON-дампа текущего профиля для переноса между разными браузерами или компьютерами.
 
 ---

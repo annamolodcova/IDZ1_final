@@ -1,14 +1,12 @@
 /**
- * SQLite в браузере (sql.js) с постоянным хранением.
+ * SQLite с постоянным локальным хранением в файле career-diary.sqlite и браузерном хранилище.
  *
- * Порядок выбора хранилища:
- *   1. OPFS (Origin Private File System) — самый надёжный и быстрый вариант;
- *   2. IndexedDB — фоллбек, если OPFS недоступен;
- *   3. память — приложение работает, но предупреждает, что данные не сохраняются.
- *
- * К каждому асинхронному вызову хранилища добавлен таймаут: некоторые браузеры
- * (и headless-окружения) могут «подвешивать» Storage API, и приложение не должно
- * из-за этого застревать на экране загрузки.
+ * Порядок выбора источника:
+ *   1. Локальный файл career-diary.sqlite в папке проекта через /api/db (наивысший приоритет —
+ *      данные сохраняются напрямую в файл на диске компьютера);
+ *   2. OPFS (Origin Private File System) — надёжное дисковое хранилище браузера;
+ *   3. IndexedDB — фоллбек, если OPFS недоступен;
+ *   4. память — аварийный режим, если все дисковые API заблокированы.
  */
 
 import initSqlJs from 'sql.js';
@@ -23,14 +21,13 @@ const CURRENT_DB_VERSION = 2;
 const LEGACY_USER_EMAIL = 'anna@example.com';
 const LEGACY_USER_PASSWORD = 'demo1234';
 
-// Щедрые таймауты: холодный старт Storage API иногда занимает секунды.
-// Зависший вызов не должен оставлять приложение на экране загрузки.
 const OPFS_TIMEOUT_MS = 8000;
 const IDB_TIMEOUT_MS = 8000;
 
 let dbInstance = null;
 let initPromise = null;
 let storageWarning = null;
+let currentSource = null;
 
 function withTimeout(promise, ms, label) {
   return new Promise((resolve, reject) => {
@@ -46,6 +43,39 @@ function withTimeout(promise, ms, label) {
       },
     );
   });
+}
+
+/**
+ * Читает локальный файл career-diary.sqlite через встроенный серверный эндпоинт /api/db.
+ */
+async function readFromLocalFile() {
+  try {
+    const response = await fetch('/api/db', { cache: 'no-cache' });
+    if (response.ok) {
+      const buffer = await response.arrayBuffer();
+      if (buffer && buffer.byteLength > 0) {
+        return new Uint8Array(buffer);
+      }
+    }
+  } catch {
+    // API недоступен при чисто статическом открытии файла без dev/preview сервера
+  }
+  return null;
+}
+
+/**
+ * Записывает бинарный дамп SQLite напрямую в файл career-diary.sqlite в папке проекта.
+ */
+async function writeToLocalFile(bytes) {
+  const response = await fetch('/api/db', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: bytes,
+  });
+  if (!response.ok) {
+    throw new Error(`Ошибка записи локального файла базы данных: ${response.status}`);
+  }
+  return response.json();
 }
 
 function openIndexedDB() {
@@ -99,9 +129,6 @@ async function writeToIndexedDB(bytes) {
   }
 }
 
-/**
- * Читает файл БД из OPFS. Возвращает null, если файла ещё нет.
- */
 async function readFromOPFS() {
   if (!('storage' in navigator) || typeof navigator.storage.getDirectory !== 'function') {
     return null;
@@ -118,9 +145,6 @@ async function readFromOPFS() {
   return new Uint8Array(buffer);
 }
 
-/**
- * Пишет файл БД в OPFS.
- */
 async function writeToOPFS(bytes) {
   if (!('storage' in navigator) || typeof navigator.storage.getDirectory !== 'function') {
     throw new Error('OPFS недоступен');
@@ -139,15 +163,6 @@ async function writeToOPFS(bytes) {
   );
   await withTimeout(writable.write(bytes), OPFS_TIMEOUT_MS, 'opfs.write');
   await withTimeout(writable.close(), OPFS_TIMEOUT_MS, 'opfs.close');
-
-  // Просим браузер не вытеснять данные при нехватке места.
-  if (typeof navigator.storage.persist === 'function') {
-    try {
-      await withTimeout(navigator.storage.persist(), 1000, 'opfs.persist');
-    } catch {
-      // Ничего страшного: данные всё равно записаны.
-    }
-  }
 }
 
 function applySchema(db) {
@@ -155,31 +170,27 @@ function applySchema(db) {
   db.exec(`PRAGMA user_version = ${CURRENT_DB_VERSION};`);
 }
 
-function readSchemaVersion(db) {
-  const result = db.exec('PRAGMA user_version;');
-  return result?.[0]?.values?.[0]?.[0] ?? 0;
+function getDbVersion(db) {
+  try {
+    const res = db.exec('PRAGMA user_version;');
+    return res?.[0]?.values?.[0]?.[0] ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
 function hasColumn(db, table, column) {
-  const result = db.exec(`PRAGMA table_info(${table});`);
-  const rows = result?.[0]?.values ?? [];
-  return rows.some((row) => row[1] === column);
+  try {
+    const info = db.exec(`PRAGMA table_info(${table});`);
+    const cols = info?.[0]?.values?.map((row) => row[1]) ?? [];
+    return cols.includes(column);
+  } catch {
+    return false;
+  }
 }
 
-/**
- * Приводит базу к актуальной версии схемы.
- * Версия 1 → 2: появляются пользователи, у вакансий — владелец.
- * Старые записи без владельца закрепляются за демо-профилем,
- * чтобы данные не потерялись.
- */
 async function migrateDatabase(db) {
-  const version = readSchemaVersion(db);
-
-  if (version === 0) {
-    applySchema(db);
-    return;
-  }
-
+  const version = getDbVersion(db);
   if (version >= CURRENT_DB_VERSION) return;
 
   db.exec(`
@@ -227,7 +238,7 @@ async function migrateDatabase(db) {
 }
 
 /**
- * Инициализация базы. Идемпотентна: повторные вызовы получают тот же инстанс.
+ * Инициализация базы данных.
  */
 export async function initDatabase() {
   if (dbInstance) return dbInstance;
@@ -238,19 +249,31 @@ export async function initDatabase() {
 
     let bytes = null;
     let source = null;
-    // Отличаем «данных ещё нет» (нормальный первый запуск) от «хранилище недоступно».
     let storageAvailable = false;
 
-    // 1. OPFS
+    // 1. Приоритет: локальный SQLite файл в папке проекта через /api/db
     try {
-      bytes = await readFromOPFS();
-      storageAvailable = true;
-      if (bytes) source = 'opfs';
+      bytes = await readFromLocalFile();
+      if (bytes) {
+        storageAvailable = true;
+        source = 'local-file';
+      }
     } catch (error) {
-      console.warn('OPFS недоступен, пробуем IndexedDB:', error.message);
+      console.warn('Локальный файл SQLite недоступен:', error.message);
     }
 
-    // 2. IndexedDB — и как фоллбек, и как второй источник сохранённых данных.
+    // 2. OPFS (браузерное дисковое хранилище)
+    if (!bytes) {
+      try {
+        bytes = await readFromOPFS();
+        storageAvailable = true;
+        if (bytes) source = 'opfs';
+      } catch (error) {
+        console.warn('OPFS недоступен, пробуем IndexedDB:', error.message);
+      }
+    }
+
+    // 3. IndexedDB — как фоллбек
     if (!bytes) {
       try {
         bytes = await readFromIndexedDB();
@@ -265,7 +288,6 @@ export async function initDatabase() {
     if (bytes) {
       try {
         db = new SQL.Database(bytes);
-        // Файл мог быть создан другой версией схемы.
         await migrateDatabase(db);
       } catch (error) {
         console.warn('Не удалось открыть сохранённую базу, создаём новую:', error.message);
@@ -280,13 +302,13 @@ export async function initDatabase() {
 
     if (!storageAvailable) {
       storageWarning =
-        'Постоянное хранилище браузера недоступно: данные не сохранятся после перезагрузки.';
+        'Постоянное хранилище недоступно: данные не сохранятся после перезагрузки.';
     }
 
     dbInstance = db;
+    currentSource = source;
     return db;
   })().catch((error) => {
-    // Сбрасываем промис, чтобы можно было попробовать снова.
     initPromise = null;
     throw error;
   });
@@ -298,6 +320,10 @@ export function getStorageWarning() {
   return storageWarning;
 }
 
+export function getStorageSource() {
+  return currentSource;
+}
+
 export function getDatabase() {
   if (!dbInstance) {
     throw new Error('Database not initialized. Call initDatabase() first.');
@@ -306,26 +332,39 @@ export function getDatabase() {
 }
 
 /**
- * Сохраняет базу в постоянное хранилище.
- * @returns {Promise<{ ok: boolean, warning?: string }>}
+ * Сохраняет базу в локальный файл в папке проекта и постоянное хранилище браузера.
+ * @returns {Promise<{ ok: boolean, warning?: string, source?: string }>}
  */
 export async function saveDatabase(db = dbInstance) {
   if (!db) return { ok: false, warning: 'База данных не инициализирована.' };
 
   const bytes = db.export();
+  let localSaved = false;
 
+  // 1. Сохраняем в локальный SQLite файл в папке проекта
+  try {
+    await writeToLocalFile(bytes);
+    localSaved = true;
+  } catch {
+    // При статическом просмотре без локального сервера пропускаем
+  }
+
+  // 2. Также синхронизируем с браузерным хранилищем (OPFS / IndexedDB)
   try {
     await writeToOPFS(bytes);
-    return { ok: true };
+    return { ok: true, source: localSaved ? 'local-file+opfs' : 'opfs' };
   } catch (opfsError) {
     try {
       await writeToIndexedDB(bytes);
-      return { ok: true };
+      return { ok: true, source: localSaved ? 'local-file+idb' : 'indexeddb' };
     } catch (idbError) {
+      if (localSaved) {
+        return { ok: true, source: 'local-file' };
+      }
       console.warn('Не удалось сохранить базу:', opfsError.message, idbError.message);
       return {
         ok: false,
-        warning: 'Данные не сохраняются: хранилище браузера недоступно или переполнено.',
+        warning: 'Данные не сохраняются: локальный файл и хранилище браузера недоступны.',
       };
     }
   }

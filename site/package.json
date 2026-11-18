@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "archive": "bash ../scripts/make-archive.sh"
+    "seed": "node ../scripts/seed-db.mjs"
   },
   "dependencies": {
     "react": "^19.0.0",
