@@ -143,26 +143,6 @@ npm install
 npm run dev      # http://localhost:5173 (если порт занят, Vite возьмёт следующий)
 npm run build    # production-сборка в site/dist
 npm run preview  # просмотр сборки
-```
-
-## Архив для сдачи
-
-```bash
-cd site
-npm run archive
-# или из корня проекта:
-bash scripts/make-archive.sh
-```
-
-Скрипт соберёт `career-diary-clean.tar.gz` в корне проекта: исходники, документация, рефлексия (`REFLECTION.md`) и скриншоты, **без** `node_modules`, `dist`, `.git` и служебных файлов macOS. После сборки он сам проверяет, что мусор не попал в архив, и печатает размер и список файлов.
-
-Проверка архива «с нуля»:
-
-```bash
-mkdir /tmp/verify && cd /tmp/verify
-tar -xzf /path/to/career-diary-clean.tar.gz
-cd site && npm install && npm run build
-```
 
 ## Проверки
 
