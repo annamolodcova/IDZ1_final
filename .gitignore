@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Зависимости и сборка
+node_modules/
+dist/
+site/dist/
+.vite/
+
+# Логи
+*.log
+npm-debug.log*
+
+# Локальные переменные окружения
+.env
+.env.*
+!.env.example
+
+# Редакторы
+.vscode/
+.idea/
+
+# Локальные инструкции агента
+/AGENTS.md
+
+# Архив для сдачи
+career-diary-clean.tar.gz
+career-diary-clean.zip
